@@ -1,0 +1,7 @@
+**/.zig*
+**/zig-out/
+**/zig-cache/
+**/.vscode/
+**/.idea/
+**/*.o
+
