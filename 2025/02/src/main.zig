@@ -3,15 +3,19 @@ const std = @import("std");
 // Faster but still relatively slow. Better solution would be to generate the numbers by only looking at the first half of the numbers in range and checking if the generated number is in range.
 
 const Range = struct {
-    start: u64,
-    end: u64,
+    start_num: u64,
+    start: []const u8,
+    end_num: u64,
+    end: []const u8,
 
     pub fn init_from_string(range: []const u8) !Range {
         var start_end = std.mem.splitScalar(u8, range, '-');
-        const start = try std.fmt.parseInt(u64, std.mem.trim(u8, start_end.next().?, &std.ascii.whitespace), 10);
-        const end = try std.fmt.parseInt(u64, std.mem.trim(u8, start_end.next().?, &std.ascii.whitespace), 10);
+        const start = std.mem.trim(u8, start_end.next().?, &std.ascii.whitespace);
+        const start_num = try std.fmt.parseInt(u64, std.mem.trim(u8, start, &std.ascii.whitespace), 10);
+        const end = std.mem.trim(u8, start_end.next().?, &std.ascii.whitespace);
+        const end_num = try std.fmt.parseInt(u64, std.mem.trim(u8, end, &std.ascii.whitespace), 10);
         std.debug.assert(start_end.next() == null);
-        return Range{ .start = start, .end = end };
+        return Range{ .start = start, .start_num = start_num, .end = end, .end_num = end_num };
     }
 };
 
@@ -52,7 +56,11 @@ pub fn main() !void {
     defer thread_pool.deinit();
 
     for (ranges.items) |item| {
-        thread_pool.spawnWg(&wait_group, find_invalid_ids, .{ item, &list, arena });
+        var set: std.AutoArrayHashMap(u64, void) = std.AutoArrayHashMap(u64, void).init(arena);
+        defer set.deinit();
+        try generate_invalid_ids_in_range(item, &set, arena);
+        try list.appendSlice(arena, set.keys());
+        //thread_pool.spawnWg(&wait_group, find_invalid_ids, .{ item, &list, arena });
     }
 
     // wait for all threads to finish
@@ -62,14 +70,51 @@ pub fn main() !void {
     for (list.items) |item| {
         sum += item;
     }
-    std.debug.print("{d}\n", .{sum});
+    std.debug.print("Sum of #{d} elements = {d}\n", .{ list.items.len, sum });
+}
+
+fn generate_invalid_ids_in_range(range: Range, set: anytype, allocator: std.mem.Allocator) !void {
+    //std.debug.print("Processing range {d}-{d}\n", .{ range.start_num, range.end_num });
+    const first_half_start = if (range.start.len < 2) range.start else range.start[0..(range.start.len / 2)];
+    const first_half_start_num: u64 = try std.fmt.parseInt(u64, first_half_start, 10);
+    var first_half_end = if (range.end.len < 2) range.end else range.end[0..(range.end.len / 2)];
+    var first_half_end_num: u64 = try std.fmt.parseInt(u64, first_half_end, 10);
+    if (first_half_start_num > first_half_end_num) {
+        first_half_end = range.end[0 .. first_half_end.len + 1];
+        first_half_end_num = try std.fmt.parseInt(u64, first_half_end, 10);
+    }
+    for (first_half_start_num..first_half_end_num + 1) |pattern| {
+        const pattern_str = try std.fmt.allocPrint(allocator, "{d}", .{pattern});
+        defer allocator.free(pattern_str);
+        for (1..pattern_str.len + 1) |i| {
+            const slice = pattern_str[0..i];
+            var generated: std.ArrayList(u8) = .empty;
+            defer generated.deinit(allocator);
+            var len = range.start.len;
+            while (len <= range.end.len) : (len += 1) {
+                for (0..(len / slice.len)) |_| {
+                    try generated.appendSlice(allocator, slice);
+                }
+                //std.debug.print("Generated pattern {s}\n", .{generated.items});
+                const generated_num = try std.fmt.parseInt(u64, generated.items, 10);
+                if (generated.items.len > 1 and generated_num <= range.end_num and generated_num >= range.start_num) {
+                    try set.*.put(generated_num, {});
+                    std.debug.print("Found repeated pattern {d} in number {s}-{s}\n", .{ generated_num, range.start, range.end });
+                }
+                generated.clearAndFree(allocator);
+            }
+        }
+    }
 }
 
 fn find_invalid_ids(range: Range, list: *std.ArrayList(u64), allocator: std.mem.Allocator) void {
-    std.debug.print("Processing range {d}-{d}\n", .{ range.start, range.end });
-    for (range.start..range.end + 1) |num| {
+    std.debug.print("Processing range {d}-{d}\n", .{ range.start_num, range.end_num });
+    for (range.start_num..range.end_num + 1) |num| {
         const string_num = std.fmt.allocPrint(allocator, "{d}", .{num}) catch unreachable;
         defer allocator.free(string_num);
+        if (string_num.len % 2 != 0) {
+            continue;
+        }
         for (1..(string_num.len / 2) + 1) |i| {
             const has_pattern: bool = std.mem.eql(u8, string_num[0..i], string_num[i..]);
             if (has_pattern) {
